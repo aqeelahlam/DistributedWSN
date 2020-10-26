@@ -6,35 +6,60 @@
 #include <pthread.h>
 
 #define NUM_THREADS 1
+#define SATELLITE_SIZE 100
+#define MAX_TEMP_RANGE 150
+#define MIN_TEMP_RANGE 80
 
 
-void b_station()
+//void b_station()
 void *ThreadFunc(void *pArg);
 
-struct sThreadRes {
-    int *m_temps;
+
+//struct sThreadRes {
+//    int *m_temps;
+//    };
+
+struct satValues{
+    int x_coord;
+    int y_coord;
+    int timestamp;
+    int temp;
     };
+    
+struct satValues *satelliteTemps[100];
+int satelliteTempsCount;
+
 
 
 void *ThreadFunc(void *pArg){
-    int i;
-    int *pData = (int*)pArg;
-    int my_rank = *pData;
-    struct sThreadRes *pThreadRes = (struct sThreadRes*)malloc(sizeof(struct sThreadRes));
+  
+    //int *pData = (int*)pArg;
+    //int my_rank = *pData;
+    //struct sThreadRes *pThreadRes = (struct sThreadRes*)malloc(sizeof(struct sThreadRes));
     
-    //first = (my_rank) * gUpperLimit/NUM_THREADS + 1;
-    //last = (my_rank +1) * gUpperLimit/NUM_THREADS;
+    //pThreadRes->m_temps = (int*)malloc((??????) * sizeof(int));
     
-    pThreadRes->m_temp = ;
+    unsigned int seed = time(NULL) * satelliteTempsCount;
+	    
+		/*scaling the output of rand_r() to be in between MIN_RANGE and MAX_RANGE
+		 and assigning it to a position in the list */
+	satelliteTemps[satelliteTempsCount]->temp = rand_r(&seed) % (MAX_TEMP_RANGE + 1 - MIN_TEMP_RANGE) + MIN_TEMP_RANGE;
+	satelliteTempsCount++;
+
     
-    return pThreadRes;
+    return NULL;
     }
 
 
-void b_station(){
+int main(){
+   
+    *satelliteTemps = (struct satValues*)malloc(SATELLITE_SIZE * sizeof(struct satValues));
+    satelliteTempsCount = 0;
+    
     pthread_t tid[NUM_THREADS];
     int threadNum[NUM_THREADS];
-    struct sThreadRes *pThreadRes = NULL; 
+    MPI_Status status;
+    //struct sThreadRes *pThreadRes = NULL; 
    
     int flag = 0;
     int recvMsg = 0;
@@ -52,7 +77,8 @@ void b_station(){
 	// Wait for all threads to finish
 	for(int i = 0; i < NUM_THREADS; i++)
 	{
-	    	pthread_join(tid[i], (void**)&pThreadRes);
+	    	//pthread_join(tid[i], (void**)&pThreadRes);
+	    	pthread_join(tid[i], NULL);
 	}
 
     
@@ -64,9 +90,10 @@ void b_station(){
         if (flag) {
             MPI_Recv(&recvMsg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
             // Compare recvMsg with thread temp
-            // ... here...
+            
            }
     }
     
     //MPI_Wait(&request, &status);
+    return 0;
 }
