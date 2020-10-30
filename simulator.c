@@ -11,7 +11,7 @@
 // Displacement by 1:
 #define DISP 1 
 // Maximum Iterations:
-#define MAX_ITER 1
+#define MAX_ITER 100
 // Sensor Threshold:
 #define SENSOR_THRESH 5
 // Temperature Threshold:
@@ -26,6 +26,11 @@ void sleep(int rank);
 int base_station(MPI_Comm world_comm, MPI_Comm comm);
 int slave_node(MPI_Comm world_comm, MPI_Comm comm);
 void *ThreadFunc(void *pArg);
+
+pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int pthread_state = 0;
+
 
 /*
 struct satValue{
@@ -154,6 +159,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     */
     int top, bottom;
     int left, right;
+    int flag = 0;
 
     // Arrays to hold dimension, coordiantes and wrap around
     int dims[ndims], coord[ndims];
@@ -218,8 +224,11 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
 
     unsigned int seed = time(NULL);
 
-    while(iteration <= MAX_ITER){
-
+    while(!flag){
+        MPI_Iprobe(worldSize-1, 0, MPI_COMM_WORLD, &flag, &status);
+        if(flag){
+            break;
+            }
         int received_temperature[4] = {0,0,0,0};
         int numOfNodesAboveThreshold = 0;
         int randomTemp = 0;
@@ -280,24 +289,33 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 	pthread_t tid;
     pthread_create(&tid, 0, ThreadFunc, &size);
     
-    
     // wait for messages from WSN nodes
-    for (int i = 0; i<100; i++){
+   
+    for (int i = 0; i<10; i++){
+        printf("Iter: %d\n", i);
         while(!flag){
         // fixed loop iterates 100 times
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
             if (flag) {
                 MPI_Recv(&recvMsg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
-                //printf("Recv: %d\n", recvMsg);
+                printf("Recv: %d\n\n", recvMsg);
                 // Compare recvMsg with thread temp
                 
                }
         }
         flag = 0;
     }
+    for(int i = 0; i <= size; i++){
+            MPI_Send(&i, 1, MPI_INT, i, 0, world_comm);
+            //printf("Temperature: %d\n ", randomTemp);
+        }
+  
     
-    pthread_join(tid, NULL);
+    pthread_state = 1;
+    
+    //pthread_join(tid, NULL);
+    
     return 0;
 }
 
@@ -308,6 +326,10 @@ void *ThreadFunc(void *pArg){
 	nnodes = *p;
 	
 	while(1){
+	    if(pthread_state){
+	        pthread_exit(NULL);
+	    }
+	    pthread_mutex_lock(&g_Mutex);
         unsigned int seed = time(NULL) * satelliteValueCount;
 	    //printf("Count: %d\n", satelliteValueCount); 
         /*scaling the output of rand_r() to be in between MIN_RANGE and MAX_RANGE and assigning it to a position in the list */
@@ -325,13 +347,15 @@ void *ThreadFunc(void *pArg){
 	    
 	    satelliteValueCount++;
 	    
+	    
 	    if(satelliteValueCount == 100) {
 	        satelliteValueCount = 0;
 	        }
+	    pthread_mutex_unlock(&g_Mutex);
 	    sleep(1);
-	  
+	    
 	    }
-    return 0;
+    return NULL;
     }
     
 
