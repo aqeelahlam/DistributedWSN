@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <mpi.h>
 #include <pthread.h>
+#include <time.h>
 
 // Used in MPI_CART_SHIFT to find neighbour process:
 #define SHIFT_ROW 0
@@ -16,13 +17,14 @@
 #define SENSOR_THRESH 5
 // Temperature Threshold:
 #define TEMP_THRESH 80
-
-#define SATELLITE_SIZE 100
+// Random Temperature Generated Range:
 #define MAX_TEMP_RANGE 100
 #define MIN_TEMP_RANGE 65
 
-void sleep(int rank);
+#define SATELLITE_SIZE 100
 
+// Initialization of functions used
+void sleep(int rank);
 int base_station(MPI_Comm world_comm, MPI_Comm comm);
 int slave_node(MPI_Comm world_comm, MPI_Comm comm);
 void *ThreadFunc(void *pArg);
@@ -31,41 +33,43 @@ pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int pthread_state = 0;
 
-
-/*
-struct satValue{
-    int sat_rank;
-    int timestamp;
-    int temp;
-    };
-*/
-
 struct satValue{
     int sat_rank;
     int temp;
     time_t timestamp;
     };
-    
-struct satValue satelliteValues[100];
 
+/*
+Struct of Values sent to Base Station
+*/
+struct toSend{
+    int node_rank;
+    int temp;
+    int adjacentRanks[4];
+    int adjacentTemp[4];
+    time_t timestamp;
+    };
+    
+   
+struct satValue satelliteValues[100];
 
 int main(int argc, char *argv[]) {
 
     int size, rank;
     // The MPI Communicator Inititalized
     MPI_Comm new_comm;
-    /* start up initial MPI environment */
+
+    // Start up initial MPI environment
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     
+    
     /*
+
     int nrows, ncols;
-    
     int ndims = 2;
-    
     int dims[ndims];
-    
 
     if (argc == 3) {
         // SPECIFY NO OF ROWS AND COLUMNS through command line arguments
@@ -91,24 +95,19 @@ int main(int argc, char *argv[]) {
         nrows=ncols=(int)sqrt(size);
         dims[0]=dims[1]=0;
     }
-    
     */
-
     
-
 
     /*
+    Here we Split the World Communicator into two:
     'rank == size -1' will return 0 or 1 (True or False)
     Color will either be:
     0: For Slaves 
     1: For Master
     */ 
-
     MPI_Comm_split(MPI_COMM_WORLD, rank == size-1, 0, &new_comm); 
 
     // The last rank is the Master
-    
-    
     if(rank == size-1)
         base_station(MPI_COMM_WORLD, new_comm);
     else
@@ -118,13 +117,11 @@ int main(int argc, char *argv[]) {
 }
 
 
-
-
 int slave_node(MPI_Comm world_comm, MPI_Comm comm){
-
+    
     // Sizes of WORLD_COMM and Virtual Slave Topologies
     int worldSize, size;
-
+    // Current Rank of the Slave
     int rank;
 
     int reorder, my_cart_rank, ierr;
@@ -156,17 +153,21 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     */
     int top, bottom;
     int left, right;
+
     int end_flag = 0;
 
     // Arrays to hold dimension, coordiantes and wrap around
     int dims[ndims], coord[ndims];
     int wrap_around[ndims];
+
+    // Holds the rank of the Basestation
     int baseStationRank = worldSize-1;
-        
+    
+    // HERE WE HAVE TO CHANGE TO CHANGE GRID SIZE
     dims[0]=dims[1]=0;
     
     MPI_Dims_create(size, ndims, dims);
-    
+
     if(rank == 0)
         printf("Root Rank: %d. Comm Size: %d: Grid Dimension = [%d x %d] \n",rank ,size,dims[0],dims[1]);
 
@@ -175,6 +176,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     communicate with each other in a circular manner.
     */
     wrap_around[0] = wrap_around[1] = 0;
+
     /* This would re-order the ranking if set to one */
     reorder = 1;
     // Error boolean variable
@@ -194,22 +196,11 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     Finds my coordinates in the cartesian communicator group 
     */
     MPI_Cart_coords(comm2D, rank, ndims, coord);
-    /* 
-    Use my cartesian coordinates to find my rank in cartesian group
-    */
-    MPI_Cart_rank(comm2D, coord, &my_cart_rank);
-    
-    /* Get my neighbors; axis is coordinate dimension of shift */
-    
-    /* 
-    axis=0 ==> shift along the rows: P[my_row-1]: P[me] : P[my_row+1] 
-    */
-    
-    /* 
-    axis=1 ==> shift along the columns P[my_col-1]: P[me] : P[my_col+1] 
-    */
 
-    // CALCULATE PROCESS ID FOR NEIGHBOUR process
+    // Use my cartesian coordinates to find my rank in cartesian group
+    MPI_Cart_rank(comm2D, coord, &my_cart_rank);
+
+    // Calculate Process ID for adjacent process:
     MPI_Cart_shift(comm2D, SHIFT_ROW, DISP, &top, &bottom);
     MPI_Cart_shift(comm2D, SHIFT_COL, DISP, &left, &right);
 
@@ -218,13 +209,17 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     adjacent[2] = left;
     adjacent[3] = right;
 
+    int adjacentNodes = 4;
+
     unsigned int seed = time(NULL)*rank;
 
     while(!end_flag){
         MPI_Iprobe(worldSize-1, 0, MPI_COMM_WORLD, &end_flag, &status);
         if(end_flag){
             break;
-            }
+        } 
+
+        struct toSend packet;
         int received_temperature[4] = {-1,-1,-1,-1};
         int numOfNodesAboveThreshold = 0;
         int randomTemp = 0;
@@ -232,42 +227,40 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
         randomTemp = rand_r(&seed) % (MAX_TEMP_RANGE + 1 - MIN_TEMP_RANGE) + MIN_TEMP_RANGE; 
 
         // Perform sending operation without having adjacent nodes to receive
-        for(int i = 0; i < 4; i++){
+        for(int i = 0; i < adjacentNodes; i++){
             MPI_Send(&randomTemp, 1, MPI_INT, adjacent[i], 0, comm2D);
-            //printf("Temperature: %d\n ", randomTemp);
         }
 
         // If the random temperature 
         if(randomTemp > TEMP_THRESH){
-            for(int i = 0; i < 4; i++){
+            for(int i = 0; i < adjacentNodes; i++){
                 MPI_Recv(&received_temperature[i], 1, MPI_INT, adjacent[i], 0, comm2D, &status);
-                
             }
-            
-        //printf("top: %d, bottom: %d, left: %d, right: %d\n", received_temperature[0],received_temperature[1], received_temperature[2],received_temperature[3]);
-        //printf("Rank: %d, Temperature: %d\n", rank, randomTemp);
-        
 
             // Check abnoramlities in temp : 
-            for(int j = 0; j < 4; j++){
+            for(int j = 0; j < adjacentNodes; j++){
                 if((abs(randomTemp-received_temperature[j])) <= SENSOR_THRESH){
                     numOfNodesAboveThreshold++;
                 }
             }
-            //printf("blah: %d ", numOfNodesAboveThreshold);
         }
-        
-        
 
-        
 
-        // Send the number of nodes to BaseStation
+        /*
+        if at least two or more neighbourhood nodes match the sensor readings of the local node
+        */
 	    if(numOfNodesAboveThreshold >= 2){
-            MPI_Send(&rank, 1, MPI_INT, worldSize-1, 0, world_comm);
-            //printf("RANK: %d\n", rank);
-            printf("Number of Nodes: %d\n\n", numOfNodesAboveThreshold);
+            // Initialize structure members
+            packet.node_rank = rank;
+            packet.temp = randomTemp;
+            time(&packet.timestamp);
+            for(int i = 0; i < adjacentNodes; i ++){
+                packet.adjacentRanks[i] = adjacent[i];
+                packet.adjacentTemp[i] = received_temperature[i];   
+            }
+            // Alert the base station
+            MPI_Send(&packet, sizeof(struct toSend), MPI_CHAR, baseStationRank, 0, world_comm);           
         }
-        
 	    sleep(1);
     }
           
@@ -286,9 +279,9 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
     MPI_Status status;
     
     int flag = 0;
-    int recvMsg = 0;
+    //int recvMsg = 0;
     
- 
+    struct toSend recvMsg;
    
 	pthread_t tid;
     pthread_create(&tid, 0, ThreadFunc, &size);
@@ -302,24 +295,22 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
             if (flag) {
-                MPI_Recv(&recvMsg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
-                //printf("Recv: %d\n\n", recvMsg);
+                MPI_Recv(&recvMsg, sizeof(struct toSend), MPI_CHAR, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
+                printf("Temperature: %d, Rank: %d, Time: %s, top: %d \n", recvMsg.temp, recvMsg.node_rank, ctime(&recvMsg.timestamp), recvMsg.adjacentRanks[0]);
                 // Compare recvMsg with thread temp
-                
-               }
+
+            }
         }
         flag = 0;
     }
+
     for(int i = 0; i <= size; i++){
             MPI_Send(&i, 1, MPI_INT, i, 0, world_comm);
-            //printf("Temperature: %d\n ", randomTemp);
-        }
+    }
   
-    
     pthread_state = 1;
     
     //pthread_join(tid, NULL);
-    
     return 0;
 }
 
@@ -354,14 +345,10 @@ void *ThreadFunc(void *pArg){
 	    
 	    if(satelliteValueCount == 100) {
 	        satelliteValueCount = 0;
-	        }
+        }
 	    pthread_mutex_unlock(&g_Mutex);
 	    sleep(1);
-	    
-	    }
+	}
     return NULL;
-    }
-    
+}
 
-    
-    
