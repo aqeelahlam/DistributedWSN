@@ -142,10 +142,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
 
     // 2 Dimension Grid for Virtual Topology
     int ndims = 2;
-    // To generate Random Value Between 65 and 100
-    int maximum_num = 100;
-    int minimum_num = 65;
-    
+
     // Array of Adjacent Node
     int adjacent[4] = {-1,-1,-1,-1};
 
@@ -159,14 +156,13 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     */
     int top, bottom;
     int left, right;
-    int flag = 0;
+    int end_flag = 0;
 
     // Arrays to hold dimension, coordiantes and wrap around
     int dims[ndims], coord[ndims];
     int wrap_around[ndims];
-    int iteration = 1;
-    int baseStationRank;
-    
+    int baseStationRank = worldSize-1;
+        
     dims[0]=dims[1]=0;
     
     MPI_Dims_create(size, ndims, dims);
@@ -222,18 +218,18 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     adjacent[2] = left;
     adjacent[3] = right;
 
-    unsigned int seed = time(NULL);
+    unsigned int seed = time(NULL)*rank;
 
-    while(!flag){
-        MPI_Iprobe(worldSize-1, 0, MPI_COMM_WORLD, &flag, &status);
-        if(flag){
+    while(!end_flag){
+        MPI_Iprobe(worldSize-1, 0, MPI_COMM_WORLD, &end_flag, &status);
+        if(end_flag){
             break;
             }
-        int received_temperature[4] = {0,0,0,0};
+        int received_temperature[4] = {-1,-1,-1,-1};
         int numOfNodesAboveThreshold = 0;
         int randomTemp = 0;
         // Generate random temperature
-        randomTemp = rand_r(&seed) % (maximum_num + 1 - minimum_num) + minimum_num; 
+        randomTemp = rand_r(&seed) % (MAX_TEMP_RANGE + 1 - MIN_TEMP_RANGE) + MIN_TEMP_RANGE; 
 
         // Perform sending operation without having adjacent nodes to receive
         for(int i = 0; i < 4; i++){
@@ -247,24 +243,32 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
                 MPI_Recv(&received_temperature[i], 1, MPI_INT, adjacent[i], 0, comm2D, &status);
                 
             }
+            
+        //printf("top: %d, bottom: %d, left: %d, right: %d\n", received_temperature[0],received_temperature[1], received_temperature[2],received_temperature[3]);
+        //printf("Rank: %d, Temperature: %d\n", rank, randomTemp);
+        
 
             // Check abnoramlities in temp : 
             for(int j = 0; j < 4; j++){
-                if((abs(randomTemp-received_temperature[j])) > SENSOR_THRESH){
+                if((abs(randomTemp-received_temperature[j])) <= SENSOR_THRESH){
                     numOfNodesAboveThreshold++;
                 }
             }
             //printf("blah: %d ", numOfNodesAboveThreshold);
         }
+        
+        
+
+        
 
         // Send the number of nodes to BaseStation
 	    if(numOfNodesAboveThreshold >= 2){
             MPI_Send(&rank, 1, MPI_INT, worldSize-1, 0, world_comm);
             //printf("RANK: %d\n", rank);
+            printf("Number of Nodes: %d\n\n", numOfNodesAboveThreshold);
         }
         
 	    sleep(1);
-	    iteration++;
     }
           
 }
@@ -291,15 +295,15 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
     
     // wait for messages from WSN nodes
    
-    for (int i = 0; i<10; i++){
-        printf("Iter: %d\n", i);
+    for (int i = 0; i<100; i++){
+        //printf("Iter: %d\n", i);
         while(!flag){
         // fixed loop iterates 100 times
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
             if (flag) {
                 MPI_Recv(&recvMsg, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
-                printf("Recv: %d\n\n", recvMsg);
+                //printf("Recv: %d\n\n", recvMsg);
                 // Compare recvMsg with thread temp
                 
                }
@@ -341,7 +345,7 @@ void *ThreadFunc(void *pArg){
 	    time(&satelliteValues[satelliteValueCount].timestamp);
 	    
         
-        printf("Temp: %d\n", satelliteValues[satelliteValueCount].temp);
+        //printf("Temp: %d\n", satelliteValues[satelliteValueCount].temp);
 	    //printf("Rank: %d\n", satelliteValues[satelliteValueCount].sat_rank);
 	    //printf("Time: %s\n\n", ctime(&satelliteValues[satelliteValueCount].timestamp));
 	    
