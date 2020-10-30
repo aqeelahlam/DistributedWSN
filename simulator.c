@@ -28,6 +28,7 @@ void sleep(int rank);
 int base_station(MPI_Comm world_comm, MPI_Comm comm);
 int slave_node(MPI_Comm world_comm, MPI_Comm comm);
 void *ThreadFunc(void *pArg);
+int compare(int rank, int temp, time_t timestamp);
 
 pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -263,6 +264,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
         }
 	    sleep(1);
     }
+    return 0;
           
 }
 
@@ -288,17 +290,48 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
     
     // wait for messages from WSN nodes
    
+   // fixed loop iterates 100 times
     for (int i = 0; i<100; i++){
+        int alertType;
+        struct satValue messageMatch;
+        messageMatch.timestamp = (long)-INFINITY;
         //printf("Iter: %d\n", i);
         while(!flag){
-        // fixed loop iterates 100 times
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
             if (flag) {
                 MPI_Recv(&recvMsg, sizeof(struct toSend), MPI_CHAR, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
-                printf("Temperature: %d, Rank: %d, Time: %s, top: %d \n", recvMsg.temp, recvMsg.node_rank, ctime(&recvMsg.timestamp), recvMsg.adjacentRanks[0]);
-                // Compare recvMsg with thread temp
-
+                //printf("Temperature: %d, Rank: %d, Time: %ld, top: %d \n", recvMsg.temp, recvMsg.node_rank, recvMsg.timestamp, recvMsg.adjacentRanks[0]);
+                //compare(recvMsg.node_rank, recvMsg.temp, recvMsg.timestamp);
+               
+                
+                pthread_mutex_lock(&g_Mutex);
+                for (int i = 0; i<100; i++){
+                    if (satelliteValues[i].sat_rank == recvMsg.node_rank) {
+                        if (difftime(recvMsg.timestamp, satelliteValues[i].timestamp) < difftime(recvMsg.timestamp, messageMatch.timestamp)) {
+                            messageMatch.sat_rank = satelliteValues[i].sat_rank;
+                            messageMatch.timestamp = satelliteValues[i].timestamp;
+                            messageMatch.temp = satelliteValues[i].temp;
+                            //printf("Satellite time: %ld, Node time: %ld\n", satelliteValues[i].timestamp, recvMsg.timestamp);
+                            //printf("Rank: %d, Time diff: %f\n\n", recvMsg.node_rank, difftime(recvMsg.timestamp, satelliteValues[i].timestamp));
+                        }
+                        
+                    }
+                }
+                
+                if((abs(messageMatch.temp-recvMsg.temp)) <= SENSOR_THRESH){
+                    alertType = 1;
+                }
+                else{
+                    alertType = 0;
+                }
+                pthread_mutex_unlock(&g_Mutex);
+                printf("Rank: %d\n", recvMsg.node_rank);
+                printf("WSN Alert Time: %s\n", ctime(&recvMsg.timestamp));
+                printf("Satellite Capture Time: %s\n", ctime(&satelliteValues[i].timestamp));
+                printf("Alert type: %d\n", alertType);
+                printf("WSN Temp: %d\n", recvMsg.temp);
+                printf("Satellite Temp: %d\n\n", satelliteValues[i].temp);
             }
         }
         flag = 0;
@@ -317,6 +350,7 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 void *ThreadFunc(void *pArg){
     int nnodes;
     int satelliteValueCount = 0;
+    int randomSeedCount = 1;
     int* p = (int*)pArg;
 	nnodes = *p;
 	
@@ -325,7 +359,8 @@ void *ThreadFunc(void *pArg){
 	        pthread_exit(NULL);
 	    }
 	    pthread_mutex_lock(&g_Mutex);
-        unsigned int seed = time(NULL) * satelliteValueCount;
+	    
+        unsigned int seed = time(NULL) * (randomSeedCount);
 	    //printf("Count: %d\n", satelliteValueCount); 
         /*scaling the output of rand_r() to be in between MIN_RANGE and MAX_RANGE and assigning it to a position in the list */
 	    
@@ -341,6 +376,7 @@ void *ThreadFunc(void *pArg){
 	    //printf("Time: %s\n\n", ctime(&satelliteValues[satelliteValueCount].timestamp));
 	    
 	    satelliteValueCount++;
+	    randomSeedCount++;
 	    
 	    
 	    if(satelliteValueCount == 100) {
@@ -349,6 +385,21 @@ void *ThreadFunc(void *pArg){
 	    pthread_mutex_unlock(&g_Mutex);
 	    sleep(1);
 	}
-    return NULL;
+    return 0;
+}
+
+int compare(int rank, int temp, time_t timestamp) {
+    //printf("Rank: %d", rank);
+    pthread_mutex_lock(&g_Mutex);
+    for (int i = 0; i<100; i++){
+        if (satelliteValues[i].sat_rank == rank) {
+            printf("Satellite time: %ld, Node time: %ld\n", satelliteValues[i].timestamp, timestamp);
+            printf("Rank: %d, Time diff: %f\n\n", rank, difftime(timestamp, satelliteValues[i].timestamp));
+            //printf("Rank1: %d, Rank2: %d\n", rank, satelliteValues[i].sat_rank);
+        }
+    } 
+    pthread_mutex_unlock(&g_Mutex);
+ 
+    return 0;
 }
 
