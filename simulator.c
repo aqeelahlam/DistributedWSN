@@ -437,7 +437,7 @@ void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertT
         fprintf(logFile, "Infrared Satellite Reporting Time : %s", ctime(&satTime));
         fprintf(logFile, "Infrared Satellite Reporting (Celsius): %d\n", satTemp);
         fprintf(logFile, "Infrared Satellite Coord : (%d, %d)\n\n", getCoordi(satRank,columnSize), getCoordj(satRank,columnSize));
-        fprintf(logFile, "Communication Time (seconds) : %f\n", commTime);
+        fprintf(logFile, "Communication Time (seconds) : %.2f\n", commTime);
     }
     else{
         fprintf(logFile, "Infrared Satellite Record Status : %s\n\n", "NOT FOUND FOR GIVEN COORDINATES");
