@@ -29,7 +29,9 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm);
 int slave_node(MPI_Comm world_comm, MPI_Comm comm);
 void *ThreadFunc(void *pArg);
 int compare(int rank, int temp, time_t timestamp);
-void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertTemp, int alertType, int adjRanks[4], int adjTemps[4], time_t satTime, int satTemp, int numOfNodes);
+int getCoordi(int rank, int columnSize);
+int getCoordj(int rank, int columnSize);
+void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertTemp, int alertType, int adjRanks[4], int adjTemps[4], time_t satTime, int satTemp, int numOfNodes, int columnSize);
 
 pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -53,9 +55,13 @@ struct toSend{
     int adjacentTemp[4];
     int numOfNodes;
     time_t timestamp;
+    int colSize;
     };
     
-   
+int nrows, ncols;
+int ndims = 2;
+int dims[2];
+  
 struct satValue satelliteValues[100];
 
 int main(int argc, char *argv[]) {
@@ -70,11 +76,9 @@ int main(int argc, char *argv[]) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     
     
-    /*
+    
 
-    int nrows, ncols;
-    int ndims = 2;
-    int dims[ndims];
+    
 
     if (argc == 3) {
         // SPECIFY NO OF ROWS AND COLUMNS through command line arguments
@@ -84,7 +88,7 @@ int main(int argc, char *argv[]) {
         dims[0] = nrows; //  number of rows 
         dims[1] = ncols; // number of columns
         // if col number*row number does not equal number of processes
-        if( (nrows*ncols) != size) {
+        if( ((nrows*ncols)+1) != size) {
             // NUMBER OF PROCESSES NEED TO BE EQUAL NO OF ROWS * COLUMNS
             // RUN USING CLUSTER (mpirun -hostfile cluster w1q2 4 5)
             // if process is first process, print error message
@@ -100,7 +104,7 @@ int main(int argc, char *argv[]) {
         nrows=ncols=(int)sqrt(size);
         dims[0]=dims[1]=0;
     }
-    */
+    
     
 
     /*
@@ -162,14 +166,15 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     int end_flag = 0;
 
     // Arrays to hold dimension, coordiantes and wrap around
-    int dims[ndims], coord[ndims];
+    //int dims[ndims]; 
+    int coord[ndims];
     int wrap_around[ndims];
 
     // Holds the rank of the Basestation
     int baseStationRank = worldSize-1;
     
     // HERE WE HAVE TO CHANGE TO CHANGE GRID SIZE
-    dims[0]=dims[1]=0;
+    //dims[0]=dims[1]=0;
     
     MPI_Dims_create(size, ndims, dims);
 
@@ -260,6 +265,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
             packet.temp = randomTemp;
             packet.numOfNodes = numOfNodesAboveThreshold;
             time(&packet.timestamp);
+            packet.colSize = ncols;
             for(int i = 0; i < adjacentNodes; i ++){
                 packet.adjacentRanks[i] = adjacent[i];
                 packet.adjacentTemp[i] = received_temperature[i];   
@@ -353,7 +359,7 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
                     }
                   
                 }
-                logRecord(i, recvMsg.node_rank, matchedValue.sat_rank, recvMsg.timestamp, recvMsg.temp, alertType, recvMsg.adjacentRanks, recvMsg.adjacentTemp, matchedValue.timestamp, matchedValue.temp, recvMsg.numOfNodes);
+                logRecord(i, recvMsg.node_rank, matchedValue.sat_rank, recvMsg.timestamp, recvMsg.temp, alertType, recvMsg.adjacentRanks, recvMsg.adjacentTemp, matchedValue.timestamp, matchedValue.temp, recvMsg.numOfNodes, recvMsg.colSize);
                 
                 
                 
@@ -392,7 +398,7 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 }
 
 
-void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertTemp, int alertType, int adjRanks[4], int adjTemps[4], time_t satTime, int satTemp, int numOfNodes){
+void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertTemp, int alertType, int adjRanks[4], int adjTemps[4], time_t satTime, int satTemp, int numOfNodes, int columnSize){
     
 	FILE *logFile = fopen("log.txt", "a+");
 	double commTime;
@@ -400,8 +406,6 @@ void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertT
 	
 	currentTime = time(NULL);
 	commTime = difftime(alertTime, satTime);
-	
-	
 	
 	fprintf(logFile, "------------------------------------------------------\n");
     fprintf(logFile, "Iteration : %d\n", iter);
@@ -416,13 +420,13 @@ void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertT
     
     fprintf(logFile, "%s\t\t %s\t\t %s\t\t\n", "Reporting Node", "Coord", "Temp");
     
-    fprintf(logFile,"%d\t\t\t\t\t %d\t\t\t %d\t\t\t\n\n", nodeRank, 111111 , alertTemp);
+    fprintf(logFile,"%d\t\t\t\t\t (%d, %d)\t\t %d\t\t\t\n\n", nodeRank, getCoordi(nodeRank,columnSize), getCoordj(nodeRank,columnSize) , alertTemp);
           
     fprintf(logFile, "%s\t\t %s\t\t %s\t\t\n", "Adjacent Node", "Coord", "Temp");
     
     for(int i = 0; i < 4; i++){
         if(adjRanks[i] != -2){
-            fprintf(logFile,"%d\t\t\t\t\t %d\t\t\t %d\t\t\t\n", adjRanks[i], 111111 , adjTemps[i]);
+            fprintf(logFile,"%d\t\t\t\t\t (%d, %d)\t\t %d\t\t\t\n", adjRanks[i], getCoordi(adjRanks[i],columnSize), getCoordj(adjRanks[i],columnSize) , adjTemps[i]);
         }
     }
     fprintf(logFile, "\n");  
@@ -432,8 +436,8 @@ void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertT
         fprintf(logFile, "Infrared Satellite Record Status : %s\n\n", "FOUND");
         fprintf(logFile, "Infrared Satellite Reporting Time : %s", ctime(&satTime));
         fprintf(logFile, "Infrared Satellite Reporting (Celsius): %d\n", satTemp);
-        fprintf(logFile, "Infrared Satellite Coord : %s\n\n", "Coords");
-        fprintf(logFile, "Communication Time (seconds) : %f\n", commTime);
+        fprintf(logFile, "Infrared Satellite Coord : (%d, %d)\n\n", getCoordi(satRank,columnSize), getCoordj(satRank,columnSize));
+        fprintf(logFile, "Communication Time (seconds) : %.2f\n", commTime);
     }
     else{
         fprintf(logFile, "Infrared Satellite Record Status : %s\n\n", "NOT FOUND FOR GIVEN COORDINATES");
@@ -445,8 +449,15 @@ void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertT
 	fclose(logFile);
 }
 
-void getCoords(int rank){
+int getCoordi(int rank, int columnSize){
+    int icoord = (int) rank/columnSize;
     
+    return icoord;
+}
+
+int getCoordj(int rank, int columnSize){
+    int jcoord = rank%columnSize;
+    return jcoord;
 }
 
 
