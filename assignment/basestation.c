@@ -21,16 +21,17 @@ int activity_check = 1;
 
 int base_station(MPI_Comm world_comm, MPI_Comm comm){
     int size;
+    int slaveSize;
     //struct satValue s1 = {0, 0, 0};
     //*satelliteValues = malloc(100 * sizeof(s1));
     //*satelliteValues = (struct satValue*)malloc(100 * sizeof(struct satValue));
     
     MPI_Comm_size(world_comm, &size);
-    
+    MPI_Comm_size(world_comm, &slaveSize);
     size = size - 1;
-    g_nslaves = size - 1;
+    slaveSize = slaveSize-1;
     MPI_Status status;
-    
+    MPI_Status probe_status;
     
     // create the thread for fault detection part
     pthread_t fault_tid;
@@ -64,7 +65,7 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 				if(activity_check == 0){
 					break;
 				}
-			pthread_mutex_unlock(&f_Mutex);
+			    pthread_mutex_unlock(&f_Mutex);
         	
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
@@ -153,7 +154,8 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
   
     pthread_state = 1;
     
-    //pthread_join(tid, NULL);
+    printf("MPI Master Process finished\n");
+	fflush(stdout);
     pthread_join(fault_tid, NULL);
 	pthread_mutex_destroy(&f_Mutex);
     return 0;

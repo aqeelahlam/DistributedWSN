@@ -14,6 +14,8 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     MPI_Comm comm2D;
     MPI_Status status;
 
+    memset(buf, 0, 256 * sizeof(char));
+    
     // Get the size of the Master Communicator
     MPI_Comm_size(world_comm, &worldSize);
     // Get the size of the Slave Communicator
@@ -101,6 +103,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     // variables used for fault detection
     MPI_Status fault_status;
     int fault_flag;
+    
 
     while(!end_flag){
     	MPI_Iprobe(baseStationRank, TERMINATION_FAULT, world_comm, &fault_flag, &fault_status);
