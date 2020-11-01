@@ -9,14 +9,17 @@
 
 #define MSG_RESPOND_ALIVE 2
 
-#define SLEEP_MICRO_SEC	000000
+#define SLEEP_MICRO_SEC	0000000
+#define wait_limit_sec		2
+#define TERMINATION_FAULT 10 
 
 int master_io(MPI_Comm world_comm, MPI_Comm comm);
 int slave_io(MPI_Comm world_comm, MPI_Comm comm);
 void* ProcessFunc(void *pArg);
 
 pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
-int g_nslaves = 0;
+int g_nslaves = 0;	
+int activity_check = 1;
 
 
 // C-main function
@@ -42,11 +45,16 @@ void* ProcessFunc(void *pArg)
 {
 	char buf[256];
 	MPI_Status status;
-	MPI_Status probe_status;
+	MPI_Status probe_status;                                
 	int flag = 0;
-	struct timespec clock_time; 
+	struct timespec clock_time;       
+	struct timespec current_time;                                                                                                                                        
 	double elapsed_time; 
 	int i;
+	int size;
+	
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	
 	
 	memset(buf, 0, 256 * sizeof(char));
 	printf("Thread started\n");
@@ -69,7 +77,7 @@ void* ProcessFunc(void *pArg)
 	pthread_mutex_unlock(&g_Mutex);
 	
 	int localSlavesCount = 0;
-	while (1) {
+	while (activity_check == 1) {
 		pthread_mutex_lock(&g_Mutex);
 		if(g_nslaves <= 0){
 			pthread_mutex_unlock(&g_Mutex);
@@ -78,27 +86,37 @@ void* ProcessFunc(void *pArg)
 		pthread_mutex_unlock(&g_Mutex);
 		
 		MPI_Iprobe(MPI_ANY_SOURCE, MSG_RESPOND_ALIVE, MPI_COMM_WORLD, &flag, &probe_status);
-		if(flag == 1){
-			flag = 0;
+		if(flag){
 			MPI_Recv(buf, 256, MPI_CHAR, probe_status.MPI_SOURCE, MSG_RESPOND_ALIVE, MPI_COMM_WORLD, &status);
 			
 			clock_gettime(CLOCK_MONOTONIC, &clock_time); // get the current timestamp
 			pSlaves_last_alive_timestamp_array[probe_status.MPI_SOURCE].tv_sec =  clock_time.tv_sec;
 			pSlaves_last_alive_timestamp_array[probe_status.MPI_SOURCE].tv_nsec =  clock_time.tv_nsec;
-			
-			printf("Thread prints: %s\n", buf);
-			fflush(stdout);
 			memset(buf, 0, 256 * sizeof(char));
 		}
 		pthread_mutex_lock(&g_Mutex);
 			localSlavesCount = g_nslaves;
 		pthread_mutex_unlock(&g_Mutex);
+		
+		clock_gettime(CLOCK_MONOTONIC, &current_time);
 			for(i = 0; i < localSlavesCount; i++){
-				elapsed_time = (clock_time.tv_sec - pSlaves_last_alive_timestamp_array[i].tv_sec) * 1e9; 
-	    			elapsed_time = (elapsed_time + (clock_time.tv_nsec - pSlaves_last_alive_timestamp_array[i].tv_nsec)) * 1e-9; 
+				elapsed_time = (current_time.tv_sec - pSlaves_last_alive_timestamp_array[i].tv_sec) * 1e9; 
+	    			elapsed_time = (elapsed_time + (current_time.tv_nsec - pSlaves_last_alive_timestamp_array[i].tv_nsec)) * 1e-9; 
 				pSlaves_last_alive_elapsed_time_array[i] = elapsed_time;
 				printf("Thread prints: Slave - %d. Last active: %lf seconds ago\n", i, elapsed_time);
 				fflush(stdout);
+				if(elapsed_time >= wait_limit_sec){
+					// printf("Thread prints: Slave - %d. Last active: %lf seconds ago,\nSlave - %d is not responding. Process terminated\n", i, elapsed_time, i);
+					for(int j = 0; j< size-1; j++){
+						MPI_Send(0,0, MPI_INT, j, TERMINATION_FAULT, MPI_COMM_WORLD);
+					}
+					pthread_mutex_lock(&g_Mutex);
+					activity_check = 0;
+					pthread_mutex_unlock(&g_Mutex);
+					break;
+					return 0;
+				}
+				
 			}
 		usleep(SLEEP_MICRO_SEC);
 	}
@@ -109,7 +127,7 @@ void* ProcessFunc(void *pArg)
 	return 0;
 }
 
-// Matser function
+// Master function
 int master_io(MPI_Comm world_comm, MPI_Comm comm)
 {
 	int size;
@@ -130,11 +148,11 @@ int master_io(MPI_Comm world_comm, MPI_Comm comm)
 	printf("MPI Master Process started\n");
 	while (1) {
 		pthread_mutex_lock(&g_Mutex);
-		if(g_nslaves <= 0){
-			pthread_mutex_unlock(&g_Mutex);
-			break; // exit the loop
+		if(activity_check == 0){
+			break;
 		}
 		pthread_mutex_unlock(&g_Mutex);
+		
 		
 		
 		usleep(SLEEP_MICRO_SEC);
@@ -182,17 +200,37 @@ int slave_io(MPI_Comm world_comm, MPI_Comm comm)
 	/* use my cartesian coordinates to find my rank in cartesian group*/
 	MPI_Cart_rank(comm2D, coord, &my_cart_rank);
 
+	
+	MPI_Status fault_status; int fault_flag;
+	
+	int counter=0;
+	
 	while(1){
-		if(alive_count == 1){
-			sprintf( buf, "Slave %d at Coordinate: (%d, %d). ALIVE.", my_rank, coord[0], coord[1]);
-			MPI_Send(buf, strlen(buf) + 1, MPI_CHAR, masterSize-1, MSG_RESPOND_ALIVE, world_comm);
-			alive_count = 0;
+	
+		// To detect incoming message from base station (for the fault detected)
+		MPI_Iprobe(masterSize-1, TERMINATION_FAULT, world_comm, &fault_flag, &fault_status);
+		if(fault_flag){
+			printf("[Process %d] Fault detected\n", my_rank);
+			break;
 		}
-		alive_count++;
+
+		// To notify base station that this is active
+		sprintf( buf, "Slave %d at Coordinate: (%d, %d). ALIVE.", my_rank, coord[0], coord[1]);
+		MPI_Send(buf, strlen(buf) + 1, MPI_CHAR, masterSize-1, MSG_RESPOND_ALIVE, world_comm);
 		memset(buf, 0, 256 * sizeof(char));
-		usleep(SLEEP_MICRO_SEC);
+		
+		// SImulate a fault and terminate the loop 
+		//if(counter == (my_rank+1) * 200){
+		//	printf("[Process %d] Fault occurred\n", my_rank);
+		//	fflush(stdout);
+		//	break;
+		//}
+		
+		//counter++;
+		sleep(0);
 	}
 	
+	printf("[Process %d] ended\n", my_rank);
 
     	MPI_Comm_free( &comm2D );
 	return 0;
