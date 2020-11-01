@@ -8,6 +8,7 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     int rank;
 
     int reorder, my_cart_rank, ierr;
+    char buf[256];
 
     // This will hold the created 
     MPI_Comm comm2D;
@@ -96,12 +97,26 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
     int adjacentNodes = 4;
 
     unsigned int seed = time(NULL)*rank;
+    
+    // variables used for fault detection
+    MPI_Status fault_status;
+    int fault_flag;
 
     while(!end_flag){
-        MPI_Iprobe(worldSize-1, 0, MPI_COMM_WORLD, &end_flag, &status);
+    	MPI_Iprobe(baseStationRank, TERMINATION_FAULT, world_comm, &fault_flag, &fault_status);
+    	if(fault_flag){
+			printf("[Process %d] Fault detected\n", rank);
+			break;
+		}
+        MPI_Iprobe(baseStationRank, 0, MPI_COMM_WORLD, &end_flag, &status);
         if(end_flag){
             break;
         } 
+        
+        // To notify base station that this is active
+		sprintf( buf, "Slave %d at Coordinate: (%d, %d). ALIVE.", rank, coord[0], coord[1]);
+		MPI_Send(buf, strlen(buf) + 1, MPI_CHAR, baseStationRank, MSG_RESPOND_ALIVE, world_comm);
+		memset(buf, 0, 256 * sizeof(char));
 
         struct toSend packet;
         int received_temperature[4] = {-1,-1,-1,-1};
@@ -150,6 +165,9 @@ int slave_node(MPI_Comm world_comm, MPI_Comm comm){
         }
 	    sleep(1);
     }
+    printf("[Process %d] ended\n", rank);
+
+    MPI_Comm_free( &comm2D );
     return 0;
-          
+       
 }

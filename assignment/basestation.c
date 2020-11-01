@@ -14,6 +14,11 @@ struct satValue{
 
 struct satValue satelliteValues[100];
 
+// used for fault detection
+pthread_mutex_t f_Mutex = PTHREAD_MUTEX_INITIALIZER;
+int g_nslaves = 0;	
+int activity_check = 1;
+
 int base_station(MPI_Comm world_comm, MPI_Comm comm){
     int size;
     //struct satValue s1 = {0, 0, 0};
@@ -23,8 +28,14 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
     MPI_Comm_size(world_comm, &size);
     
     size = size - 1;
-            
+    g_nslaves = size - 1;
     MPI_Status status;
+    
+    
+    // create the thread for fault detection part
+    pthread_t fault_tid;
+	pthread_mutex_init(&f_Mutex, NULL);
+	pthread_create(&fault_tid, 0, FaultDetectProcess, NULL); // Create the thread for fault detection
     
     int flag = 0;
     //int recvMsg = 0;
@@ -38,8 +49,23 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
    
    // fixed loop iterates 100 times
     for (int i = 0; i<100; i++){
-        
+    
+    	// break if there is a fault detected
+    	pthread_mutex_lock(&f_Mutex);
+			if(activity_check == 0){
+				break;
+			}
+		pthread_mutex_unlock(&f_Mutex);
+    
         while(!flag){
+        	
+        	// break if there is a fault detected
+        	pthread_mutex_lock(&f_Mutex);
+				if(activity_check == 0){
+					break;
+				}
+			pthread_mutex_unlock(&f_Mutex);
+        	
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
             if (flag) {
@@ -128,6 +154,8 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
     pthread_state = 1;
     
     //pthread_join(tid, NULL);
+    pthread_join(fault_tid, NULL);
+	pthread_mutex_destroy(&f_Mutex);
     return 0;
 }
 
@@ -234,6 +262,93 @@ void *ThreadFunc(void *pArg){
 	}
     return 0;
 }
+
+void* FaultDetectProcess(void *pArg)
+{
+	char buf[256];
+	MPI_Status status;
+	MPI_Status probe_status;                                
+	int flag = 0;
+	struct timespec clock_time;       
+	struct timespec current_time;                                                                                                                                        
+	double elapsed_time; 
+	int i;
+	int size;
+	
+	MPI_Comm_size(MPI_COMM_WORLD, &size);
+	
+	
+	memset(buf, 0, 256 * sizeof(char));
+	printf("Fault Prevention Initialized.\n");
+	
+	clock_gettime(CLOCK_MONOTONIC, &clock_time); 
+
+	pthread_mutex_lock(&f_Mutex);
+		// Saves the current clock time for each slave process
+		// The clock time is used to calculate the last active time of each slave process.
+		struct timespec *pSlaves_last_alive_timestamp_array = (struct timespec*)malloc(g_nslaves * sizeof(struct timespec)); // dynamic or heap array
+		for(i = 0; i < g_nslaves; i++){
+			pSlaves_last_alive_timestamp_array[i].tv_sec =  clock_time.tv_sec;
+			pSlaves_last_alive_timestamp_array[i].tv_nsec =  clock_time.tv_nsec;
+		}
+		
+		// Saves the last active time of each slave process (i.e., how many seconds a slave process was last active).
+		 // This array is not really used in this sample code.
+		double *pSlaves_last_alive_elapsed_time_array = (double*)malloc(g_nslaves * sizeof(double)); // dynamic or heap array
+		memset(pSlaves_last_alive_elapsed_time_array, 0.0, g_nslaves * sizeof(double));
+	pthread_mutex_unlock(&f_Mutex);
+	
+	int localSlavesCount = 0;
+	while (activity_check == 1) {
+		pthread_mutex_lock(&f_Mutex);
+		if(g_nslaves <= 0){
+			pthread_mutex_unlock(&f_Mutex);
+			break;
+		}
+		pthread_mutex_unlock(&f_Mutex);
+		
+		MPI_Iprobe(MPI_ANY_SOURCE, MSG_RESPOND_ALIVE, MPI_COMM_WORLD, &flag, &probe_status);
+		if(flag){
+			MPI_Recv(buf, 256, MPI_CHAR, probe_status.MPI_SOURCE, MSG_RESPOND_ALIVE, MPI_COMM_WORLD, &status);
+			
+			clock_gettime(CLOCK_MONOTONIC, &clock_time); // get the current timestamp
+			pSlaves_last_alive_timestamp_array[probe_status.MPI_SOURCE].tv_sec =  clock_time.tv_sec;
+			pSlaves_last_alive_timestamp_array[probe_status.MPI_SOURCE].tv_nsec =  clock_time.tv_nsec;
+			memset(buf, 0, 256 * sizeof(char));
+		}
+		pthread_mutex_lock(&f_Mutex);
+			localSlavesCount = g_nslaves;
+		pthread_mutex_unlock(&f_Mutex);
+		
+		clock_gettime(CLOCK_MONOTONIC, &current_time);
+			for(i = 0; i < localSlavesCount; i++){
+				elapsed_time = (current_time.tv_sec - pSlaves_last_alive_timestamp_array[i].tv_sec) * 1e9; 
+	    			elapsed_time = (elapsed_time + (current_time.tv_nsec - pSlaves_last_alive_timestamp_array[i].tv_nsec)) * 1e-9; 
+				pSlaves_last_alive_elapsed_time_array[i] = elapsed_time;
+				printf("Thread prints: Slave - %d. Last active: %lf seconds ago\n", i, elapsed_time);
+				fflush(stdout);
+				if(elapsed_time >= wait_limit_sec){
+					// printf("Thread prints: Slave - %d. Last active: %lf seconds ago,\nSlave - %d is not responding. Process terminated\n", i, elapsed_time, i);
+					for(int j = 0; j< size-1; j++){
+						MPI_Send(0,0, MPI_INT, j, TERMINATION_FAULT, MPI_COMM_WORLD);
+					}
+					pthread_mutex_lock(&f_Mutex);
+					activity_check = 0;
+					pthread_mutex_unlock(&f_Mutex);
+					break;
+					return 0;
+				}
+				
+			}
+		usleep(SLEEP_MICRO_SEC);
+	}
+	printf("Thread finished\n");
+	fflush(stdout);
+	free(pSlaves_last_alive_timestamp_array);
+	free(pSlaves_last_alive_elapsed_time_array);
+	return 0;
+}
+
 
 int compare(int rank, int temp, time_t timestamp) {
     //printf("Rank: %d", rank);
