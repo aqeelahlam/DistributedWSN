@@ -1,17 +1,22 @@
 #include "common_functions.h"
 
+// Mutex for accessing global shared array
 pthread_mutex_t g_Mutex = PTHREAD_MUTEX_INITIALIZER;
 
+// Boolean to check if POSIX thread should be terminated or not
 int pthread_state = 0;
 
+// Used to keep count of the number of values entered into the gloval shared array
 int satelliteValueCount = 0;
 
+// A structure that is used to record a satellite recording value
 struct satValue{
     int sat_rank;
     int temp;
     time_t timestamp;
     };
 
+// A fixed array of satellite value recordings
 struct satValue satelliteValues[100];
 
 // used for fault detection
@@ -22,10 +27,11 @@ int activity_check = 1;
 int base_station(MPI_Comm world_comm, MPI_Comm comm){
     int size;
     int slaveSize;
-    //struct satValue s1 = {0, 0, 0};
-    //*satelliteValues = malloc(100 * sizeof(s1));
-    //*satelliteValues = (struct satValue*)malloc(100 * sizeof(struct satValue));
     
+    int trueAlerts = 0;
+    int falseAlerts = 0;
+    
+    // Get world size  
     MPI_Comm_size(world_comm, &size);
     MPI_Comm_size(world_comm, &slaveSize);
     size = size - 1;
@@ -38,11 +44,12 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 	pthread_mutex_init(&f_Mutex, NULL);
 	pthread_create(&fault_tid, 0, FaultDetectProcess, NULL); // Create the thread for fault detection
     
+    // flag used for MPI_IProbe to check if any messages are coming from WSN nodes
     int flag = 0;
-    //int recvMsg = 0;
-    
+        
     struct toSend recvMsg;
    
+    // Create POSIX thread to simulate infrared imaging satellite
 	pthread_t tid;
     pthread_create(&tid, 0, ThreadFunc, &size);
     
@@ -67,91 +74,81 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 				}
 			    pthread_mutex_unlock(&f_Mutex);
         	
+        	// Check for messages coming from WSN nodes
             MPI_Iprobe(MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &flag, &status);
            
+            // A message has been detected from WSN nodes
             if (flag) {
+                // loopEnd determines the number of elements currently in the global shared array
                 int loopEnd;
                 int alertType = 0;
                 
+                // matchedValue holds the best match of the incoming WSN node information to the shared array
                 struct satValue matchedValue;
                 matchedValue.sat_rank = -1;
                 
-                
+                // getting the number of elements currently in the array
                 if(satelliteValueCount>=100){
                     loopEnd = 100;
                 }
                 else{
                     loopEnd = satelliteValueCount;
                 }
+                // receiving the structure containing WSN node information from the WSN node
                 MPI_Recv(&recvMsg, sizeof(struct toSend), MPI_CHAR, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status );
-                //printf("Temperature: %d, Rank: %d, Time: %ld, top: %d \n", recvMsg.temp, recvMsg.node_rank, recvMsg.timestamp, recvMsg.adjacentRanks[0]);
-                //compare(recvMsg.node_rank, recvMsg.temp, recvMsg.timestamp);
-               
                 
+               
+                // lock global shared array
                 pthread_mutex_lock(&g_Mutex);
-                //printf("Loop : %d", loopEnd);
+                
+                // loop through the number of elements currently in global shared array
                 for (int j = 0; j<loopEnd; j++){
-                    //printf("Satellite Rank: %d, Satellite Temp: %d\n", satelliteValues[i].sat_rank, satelliteValues[i].temp);
+                    // if the WSN node rank and the satellite record rank matches
                     if (satelliteValues[j].sat_rank == recvMsg.node_rank) {
+                        // set the new match to this record
                         matchedValue.sat_rank = satelliteValues[j].sat_rank;
                         matchedValue.temp = satelliteValues[j].temp;
                         matchedValue.timestamp = satelliteValues[j].timestamp;
                         
-                        if (difftime(recvMsg.timestamp, satelliteValues[j].timestamp) < 50.0) {
-                            
+                        // if time difference is less than 50 seconds, this is already a match, so break
+                        if (difftime(recvMsg.timestamp, satelliteValues[j].timestamp) < TIME_THRESHOLD) {
                             break;
                         }                  
                     }
                     
                   
                 }
-                if(matchedValue.sat_rank != -1){
-                    /*
-                    printf("Satellite Rank: %d, Satellite Temp: %d\n", matchedValue.sat_rank, matchedValue.temp);
-                    printf("Satellite time: %s, Node time: %s\n", ctime(&matchedValue.timestamp), ctime(&recvMsg.timestamp));
-                    printf("Diff time: %f ", (difftime(recvMsg.timestamp, matchedValue.timestamp)));
-                    */
+                // if a match was found in the satellite records that match the node rank
+                if(matchedValue.sat_rank != -1){ 
+                    // if temperature falls within temperature threshold
                     if((abs(matchedValue.temp-recvMsg.temp)) <= SENSOR_THRESH){
-                        //printf("Temp diff: %d", (abs(matchedValue.temp-recvMsg.temp)));
                         alertType = 1;
+                        trueAlerts++;
                     }
                     else{
                         alertType = 0;
+                        falseAlerts++;
                     }
                   
                 }
+                // log the record into the log file
                 logRecord(i, recvMsg.node_rank, matchedValue.sat_rank, recvMsg.timestamp, recvMsg.temp, alertType, recvMsg.adjacentRanks, recvMsg.adjacentTemp, matchedValue.timestamp, matchedValue.temp, recvMsg.numOfNodes, recvMsg.colSize);
                 
-                
-                
-                
-                /*
-                printf("Node Rank: %d, Node Temp: %d\n", recvMsg.node_rank, recvMsg.temp);
-                
-                
-                printf("Alert type: %d\n\n", alertType);
-                */
-                
-                /*
-              
-                pthread_mutex_unlock(&g_Mutex);
-                printf("Rank: %d\n", recvMsg.node_rank);
-                printf("WSN Alert Time: %s\n", ctime(&recvMsg.timestamp));
-                printf("Satellite Capture Time: %s\n", ctime(&satelliteValues[i].timestamp));
-                printf("Alert type: %d\n", alertType);
-                printf("WSN Temp: %d\n", recvMsg.temp);
-                printf("Satellite Temp: %d\n\n", satelliteValues[i].temp);
-                */
+               // unlock global shared array
                pthread_mutex_unlock(&g_Mutex);
             }
         }
+        // get another message from WSN node, so set flag to 0 again
         flag = 0;
     }
-
+    printf("Number of true alerts: %d\n", trueAlerts);
+    printf("Number of false alerts: %d\n\n", falseAlerts);
+    // send a message to each proccessor, so that they terminate
     for(int i = 0; i <= size; i++){
             MPI_Send(&i, 1, MPI_INT, i, 0, world_comm);
     }
-  
+    
+    // terminate POSIX thread
     pthread_state = 1;
     
     printf("MPI Master Process finished\n");
@@ -164,13 +161,16 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
 
 void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertTemp, int alertType, int adjRanks[4], int adjTemps[4], time_t satTime, int satTemp, int numOfNodes, int columnSize){
     
+    // Append to log.txt file
 	FILE *logFile = fopen("log.txt", "a+");
 	double commTime;
 	time_t currentTime;
 	
 	currentTime = time(NULL);
+	// get difference between alert time and satellite recording time
 	commTime = difftime(alertTime, satTime);
 	
+	// write to all information to log file
 	fprintf(logFile, "------------------------------------------------------\n");
     fprintf(logFile, "Iteration : %d\n", iter);
     fprintf(logFile, "Logged Time : %s\n", ctime(&currentTime));
@@ -189,13 +189,14 @@ void logRecord(int iter, int nodeRank, int satRank, time_t alertTime, int alertT
     fprintf(logFile, "%s\t\t %s\t\t %s\t\t\n", "Adjacent Node", "Coord", "Temp");
     
     for(int i = 0; i < 4; i++){
+        // if there is a adjacent node
         if(adjRanks[i] != -2){
             fprintf(logFile,"%d\t\t\t\t\t (%d, %d)\t\t %d\t\t\t\n", adjRanks[i], getCoordi(adjRanks[i],columnSize), getCoordj(adjRanks[i],columnSize) , adjTemps[i]);
         }
     }
     fprintf(logFile, "\n");  
     
-    
+    // if there is a record of a satellite recording
     if(satRank != -1){
         fprintf(logFile, "Infrared Satellite Record Status : %s\n\n", "FOUND");
         fprintf(logFile, "Infrared Satellite Reporting Time : %s", ctime(&satTime));
@@ -224,42 +225,40 @@ int getCoordj(int rank, int columnSize){
     return jcoord;
 }
 
-
+// POSIX thread function that simulates infrared imaging satellite
 void *ThreadFunc(void *pArg){
+    //nnodes is the number of WSN nodes
     int nnodes;
     int iter = 0;
     int* p = (int*)pArg;
 	nnodes = *p;
 	
 	while(1){
+	    // if base station has completed its processing, exit the thread
 	    if(pthread_state){
 	        pthread_exit(NULL);
 	    }
+	    // lock global shared array
 	    pthread_mutex_lock(&g_Mutex);
 	    
+	    // set seed value
         unsigned int seed = time(NULL) * (satelliteValueCount);
-	    //printf("Count: %d\n", satelliteValueCount); 
-        /*scaling the output of rand_r() to be in between MIN_RANGE and MAX_RANGE and assigning it to a position in the list */
 	    
-	    satelliteValues[iter].temp = rand_r(&seed) % (MAX_TEMP_RANGE + 1 - MIN_TEMP_RANGE) + MIN_TEMP_RANGE;
-		          
+	    // generating random temperature,rank(coordinates) and also the time and store in global shared array
+	    satelliteValues[iter].temp = rand_r(&seed) % (MAX_TEMP_RANGE + 1 - MIN_TEMP_RANGE) + MIN_TEMP_RANGE;	          
 	    satelliteValues[iter].sat_rank = rand_r(&seed) % (nnodes + 1);
-	    
 	    time(&satelliteValues[iter].timestamp);
-	    
-        
-        //printf("Temp: %d\n", satelliteValues[iter].temp);
-	    //printf("Rank: %d\n", satelliteValues[iter].sat_rank);
-	    //printf("Time: %s\n\n", ctime(&satelliteValues[iter].timestamp));
-	    
+ 
 	    satelliteValueCount++;
 	    iter++;
 	    
-	    
+	    // if globalSharedArray has been filled, start replacing records from index 0 again
 	    if(satelliteValueCount == 100) {
 	        iter = 0;
         }
+        // unlock global shared array
 	    pthread_mutex_unlock(&g_Mutex);
+	    // sleep for 1 second
 	    sleep(1);
 	}
     return 0;
@@ -351,18 +350,3 @@ void* FaultDetectProcess(void *pArg)
 	return 0;
 }
 
-
-int compare(int rank, int temp, time_t timestamp) {
-    //printf("Rank: %d", rank);
-    pthread_mutex_lock(&g_Mutex);
-    for (int i = 0; i<100; i++){
-        if (satelliteValues[i].sat_rank == rank) {
-            printf("Satellite time: %ld, Node time: %ld\n", satelliteValues[i].timestamp, timestamp);
-            printf("Rank: %d, Time diff: %f\n\n", rank, difftime(timestamp, satelliteValues[i].timestamp));
-            //printf("Rank1: %d, Rank2: %d\n", rank, satelliteValues[i].sat_rank);
-        }
-    } 
-    pthread_mutex_unlock(&g_Mutex);
- 
-    return 0;
-}

@@ -17,21 +17,20 @@
 #define SHIFT_COL 1
 // Displacement by 1:
 #define DISP 1 
-// Maximum Iterations:
-#define MAX_ITER 100
 // Sensor Threshold:
 #define SENSOR_THRESH 5
 // Temperature Threshold:
 #define TEMP_THRESH 80
 // Random Temperature Generated Range:
 #define MAX_TEMP_RANGE 100
-#define MIN_TEMP_RANGE 65
+#define MIN_TEMP_RANGE 30
 // Message sent when a node is alive
 #define MSG_RESPOND_ALIVE 2
 // Values needed for fault detection
 #define SLEEP_MICRO_SEC 0000000
 #define wait_limit_sec	2
 #define TERMINATION_FAULT 10 
+#define TIME_THRESHOLD 50.0
 
 #define SATELLITE_SIZE 100
 
