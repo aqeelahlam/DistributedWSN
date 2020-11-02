@@ -132,7 +132,7 @@ int base_station(MPI_Comm world_comm, MPI_Comm comm){
                   
                 }
                 // log the record into the log file
-                logRecord(i, recvMsg.node_rank, matchedValue.sat_rank, recvMsg.timestamp, recvMsg.temp, alertType, recvMsg.adjacentRanks, recvMsg.adjacentTemp, matchedValue.timestamp, matchedValue.temp, recvMsg.numOfNodes, recvMsg.colSize);
+                logRecord(i + 1, recvMsg.node_rank, matchedValue.sat_rank, recvMsg.timestamp, recvMsg.temp, alertType, recvMsg.adjacentRanks, recvMsg.adjacentTemp, matchedValue.timestamp, matchedValue.temp, recvMsg.numOfNodes, recvMsg.colSize);
                 
                // unlock global shared array
                pthread_mutex_unlock(&g_Mutex);
